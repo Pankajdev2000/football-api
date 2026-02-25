@@ -211,3 +211,109 @@ async def fetch_team_form(ss_team_id: str, league_slug: str) -> list[dict]:
     except Exception as ex:
         log.warning(f"SS team form failed for {ss_team_id}: {ex}")
         return []
+
+
+# ── AFC / Conference League fixtures + standings (on schedule) ────────────────
+
+async def scrape_ss_league(league_slug: str) -> dict:
+    """
+    Fetch upcoming + recent matches and standings for a SofaScore-only league
+    (e.g. AFC Champions League Elite, Conference League).
+    Called by the scheduler every 30 min, stored in 'sofascore_leagues' cache.
+    """
+    cfg = LEAGUES.get(league_slug, {})
+    tid = cfg.get("ss_id")
+    if not tid:
+        return {}
+
+    client = ss_client()
+
+    # 1. Get current season ID
+    try:
+        seasons_resp = await client.get(f"{SS_BASE}/unique-tournament/{tid}/seasons")
+        if seasons_resp.status_code != 200:
+            return {}
+        seasons = seasons_resp.json().get("seasons", [])
+        if not seasons:
+            return {}
+        season_id = seasons[0]["id"]
+    except Exception as ex:
+        log.warning(f"SS seasons fetch failed for {league_slug}: {ex}")
+        return {}
+
+    await asyncio.sleep(0.5)
+
+    # 2. Fetch last 20 matches
+    recent = []
+    try:
+        resp = await client.get(
+            f"{SS_BASE}/unique-tournament/{tid}/season/{season_id}/events/last/0"
+        )
+        if resp.status_code == 200:
+            recent = [_build_match(e, league_slug) for e in resp.json().get("events", [])[:20]]
+    except Exception as ex:
+        log.warning(f"SS recent fetch failed for {league_slug}: {ex}")
+
+    await asyncio.sleep(0.5)
+
+    # 3. Fetch next 20 upcoming matches
+    upcoming = []
+    try:
+        resp = await client.get(
+            f"{SS_BASE}/unique-tournament/{tid}/season/{season_id}/events/next/0"
+        )
+        if resp.status_code == 200:
+            upcoming = [_build_match(e, league_slug) for e in resp.json().get("events", [])[:20]]
+    except Exception as ex:
+        log.warning(f"SS upcoming fetch failed for {league_slug}: {ex}")
+
+    await asyncio.sleep(0.5)
+
+    # 4. Fetch standings (group stage / table)
+    standings = []
+    try:
+        resp = await client.get(
+            f"{SS_BASE}/unique-tournament/{tid}/season/{season_id}/standings/total"
+        )
+        if resp.status_code == 200:
+            rows = resp.json().get("standings", [])
+            if rows:
+                for row in rows[0].get("rows", []):
+                    team = row.get("team", {})
+                    standings.append({
+                        "position":        row.get("position"),
+                        "club":            team.get("name", ""),
+                        "club_short":      team.get("shortName", team.get("name", "")),
+                        "club_logo":       get_team_logo(team.get("name", "")),
+                        "played":          row.get("matches", 0),
+                        "won":             row.get("wins", 0),
+                        "drawn":           row.get("draws", 0),
+                        "lost":            row.get("losses", 0),
+                        "goals_for":       row.get("scoresFor", 0),
+                        "goals_against":   row.get("scoresAgainst", 0),
+                        "goal_difference": row.get("scoresFor", 0) - row.get("scoresAgainst", 0),
+                        "points":          row.get("points", 0),
+                        "form":            [],
+                    })
+    except Exception as ex:
+        log.warning(f"SS standings fetch failed for {league_slug}: {ex}")
+
+    return {
+        "live":      [],   # live comes from scrape_live_scores()
+        "recent":    recent,
+        "upcoming":  upcoming,
+        "standings": standings,
+        "scorers":   [],
+    }
+
+
+async def scrape_all_ss_leagues() -> dict:
+    """Scrape AFC + Conference League — leagues whose data_source == 'sofascore'."""
+    from app.core.config import LEAGUES
+    results = {}
+    for slug, cfg in LEAGUES.items():
+        if cfg.get("data_source") == "sofascore":
+            data = await scrape_ss_league(slug)
+            if data:
+                results[slug] = data
+    return results

@@ -50,6 +50,9 @@ def _league_cache(slug: str) -> dict:
     src = cfg.get("data_source", "")
     if src == "fixturedownload":
         return _indian_data().get(slug, {})
+    if src == "sofascore":
+        # AFC and Conference League: fixtures/standings come from sofascore cache
+        return get_cache("sofascore_leagues") or {}
     return _fd_data().get(slug, {})
 
 

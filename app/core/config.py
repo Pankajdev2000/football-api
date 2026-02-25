@@ -65,6 +65,7 @@ SS_TOURNAMENT_IDS: dict[int, str] = {
     17015: "conference-league",
     16:    "fifa-world-cup",
     329:   "afc",
+    955:   "isl",       # Indian Super League on SofaScore
 }
 
 # ── fixturedownload.com ───────────────────────────────────────────────────────
@@ -162,15 +163,16 @@ LEAGUES: dict[str, dict] = {
     "isl": {
         "name": "Indian Super League", "short": "ISL", "country": "India",
         "data_source": "fixturedownload",
-        "live_source": "none",
-        "fd_download_id": "isl-2024",
+        "live_source": "sofascore",   # SofaScore does carry ISL live
+        "ss_id": 955,                 # SofaScore tournament ID for ISL
+        "fd_download_id": "isl-2024-2025",   # ✅ correct season slug
         "logo_url": "https://upload.wikimedia.org/wikipedia/en/0/04/Indian_Super_League_logo.svg",
     },
     "ifl": {
-        "name": "Indian Football League", "short": "IFL", "country": "India",
+        "name": "I-League", "short": "IFL", "country": "India",
         "data_source": "fixturedownload",
         "live_source": "none",
-        "fd_download_id": "i-league-2024",
+        "fd_download_id": "i-league-2024-2025",  # ✅ correct season slug
         "logo_url": "https://upload.wikimedia.org/wikipedia/en/3/35/I-League_logo.png",
     },
     "afc": {

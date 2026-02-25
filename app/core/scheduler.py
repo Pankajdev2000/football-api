@@ -27,7 +27,7 @@ from datetime import datetime
 
 from app.core.cache import set_cache, get_cache
 from app.core.config import IST
-from app.scrapers.sofascore import scrape_live_scores
+from app.scrapers.sofascore import scrape_live_scores, scrape_all_ss_leagues
 from app.scrapers.football_data import scrape_all_fd_leagues
 from app.scrapers.fixturedownload import scrape_all_indian_leagues
 
@@ -38,6 +38,7 @@ ACTIVE_INTERVAL_S   = 3 * 60       # 3 min  — live football hours
 OFFPEAK_INTERVAL_S  = 7 * 60       # 7 min  — quiet hours
 FD_INTERVAL_S       = 30 * 60      # 30 min — football-data.org (rate limited)
 INDIAN_INTERVAL_S   = 60 * 60      # 60 min — Indian leagues (rarely change)
+SS_LEAGUES_INTERVAL_S = 30 * 60   # 30 min — AFC / Conference League (SofaScore)
 MAX_CYCLE_S         = 120          # if scrape exceeds this → skip next live cycle
 
 # ── State ─────────────────────────────────────────────────────────────────────
@@ -45,6 +46,7 @@ _scrape_lock    = asyncio.Lock()
 _running        = False
 _last_fd_scrape = 0.0
 _last_indian    = 0.0
+_last_ss_leagues = 0.0
 
 
 def _is_active() -> bool:
@@ -106,6 +108,23 @@ async def _job_indian_leagues() -> None:
 
 # ── Main cycle ────────────────────────────────────────────────────────────────
 
+async def _job_ss_leagues() -> None:
+    """SofaScore fixtures/standings for AFC + Conference League — runs every 30 min."""
+    global _last_ss_leagues
+    if time.time() - _last_ss_leagues < SS_LEAGUES_INTERVAL_S:
+        return
+
+    log.info("Starting SofaScore leagues scrape (AFC / Conference League)...")
+    try:
+        data = await scrape_all_ss_leagues()
+        if data:
+            set_cache("sofascore_leagues", data)
+            _last_ss_leagues = time.time()
+            log.info(f"SofaScore leagues: cached {list(data.keys())}")
+    except Exception as ex:
+        log.error(f"SofaScore leagues scrape error: {ex}")
+
+
 async def _run_cycle() -> None:
     if _scrape_lock.locked():
         log.warning("Previous scrape still running — skipping cycle")
@@ -116,6 +135,7 @@ async def _run_cycle() -> None:
         await _job_live()
         await _job_fd_leagues()
         await _job_indian_leagues()
+        await _job_ss_leagues()
         elapsed = time.time() - t0
         log.info(f"Cycle complete in {elapsed:.1f}s")
 
