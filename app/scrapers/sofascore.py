@@ -1,14 +1,14 @@
 """
 app/scrapers/sofascore.py
 ═══════════════════════════════════════════════════════════════════════════════
-SofaScore public JSON API.
+SofaScore public JSON API — used for LIVE SCORES ONLY.
 
-Provides:
-  • scrape_live_scores()       — live in-progress matches (all tracked leagues)
-  • scrape_all_ss_leagues()    — Conference League fixtures/standings (scheduled)
-  • fetch_lineups()            — match lineups on-demand
-  • fetch_team_form()          — last 5 matches for a team on-demand
-  • fetch_match_events()       — goals, cards, substitutions on-demand
+football-data.org handles fixtures/standings/scorers for European leagues.
+SofaScore fills the one gap FD.org cannot: live in-progress match data.
+
+Also provides:
+  • Match lineups (on-demand, not cached in main loop)
+  • Team form (last 5 in competition, on-demand)
 ═══════════════════════════════════════════════════════════════════════════════
 """
 
@@ -138,110 +138,6 @@ async def scrape_live_scores() -> list[dict]:
     return live
 
 
-# ── Conference League fixtures/standings (scheduled every 30 min) ─────────────
-
-async def scrape_ss_league(league_slug: str) -> dict:
-    """
-    Fetch upcoming + recent matches and standings for a SofaScore-only league.
-    Currently used for Conference League (not on FD free tier).
-    """
-    cfg = LEAGUES.get(league_slug, {})
-    tid = cfg.get("ss_id")
-    if not tid:
-        return {}
-
-    client = ss_client()
-
-    # 1. Get current season ID
-    try:
-        seasons_resp = await client.get(f"{SS_BASE}/unique-tournament/{tid}/seasons")
-        if seasons_resp.status_code != 200:
-            return {}
-        seasons = seasons_resp.json().get("seasons", [])
-        if not seasons:
-            return {}
-        season_id = seasons[0]["id"]
-    except Exception as ex:
-        log.warning(f"SS seasons fetch failed for {league_slug}: {ex}")
-        return {}
-
-    await asyncio.sleep(0.5)
-
-    # 2. Recent matches
-    recent = []
-    try:
-        resp = await client.get(
-            f"{SS_BASE}/unique-tournament/{tid}/season/{season_id}/events/last/0"
-        )
-        if resp.status_code == 200:
-            recent = [_build_match(e, league_slug) for e in resp.json().get("events", [])[:20]]
-    except Exception as ex:
-        log.warning(f"SS recent fetch failed for {league_slug}: {ex}")
-
-    await asyncio.sleep(0.5)
-
-    # 3. Upcoming matches
-    upcoming = []
-    try:
-        resp = await client.get(
-            f"{SS_BASE}/unique-tournament/{tid}/season/{season_id}/events/next/0"
-        )
-        if resp.status_code == 200:
-            upcoming = [_build_match(e, league_slug) for e in resp.json().get("events", [])[:20]]
-    except Exception as ex:
-        log.warning(f"SS upcoming fetch failed for {league_slug}: {ex}")
-
-    await asyncio.sleep(0.5)
-
-    # 4. Standings
-    standings = []
-    try:
-        resp = await client.get(
-            f"{SS_BASE}/unique-tournament/{tid}/season/{season_id}/standings/total"
-        )
-        if resp.status_code == 200:
-            rows = resp.json().get("standings", [])
-            if rows:
-                for row in rows[0].get("rows", []):
-                    team = row.get("team", {})
-                    standings.append({
-                        "position":        row.get("position"),
-                        "club":            team.get("name", ""),
-                        "club_short":      team.get("shortName", team.get("name", "")),
-                        "club_logo":       get_team_logo(team.get("name", "")),
-                        "played":          row.get("matches", 0),
-                        "won":             row.get("wins", 0),
-                        "drawn":           row.get("draws", 0),
-                        "lost":            row.get("losses", 0),
-                        "goals_for":       row.get("scoresFor", 0),
-                        "goals_against":   row.get("scoresAgainst", 0),
-                        "goal_difference": row.get("scoresFor", 0) - row.get("scoresAgainst", 0),
-                        "points":          row.get("points", 0),
-                        "form":            [],
-                    })
-    except Exception as ex:
-        log.warning(f"SS standings fetch failed for {league_slug}: {ex}")
-
-    return {
-        "live":      [],
-        "recent":    recent,
-        "upcoming":  upcoming,
-        "standings": standings,
-        "scorers":   [],
-    }
-
-
-async def scrape_all_ss_leagues() -> dict:
-    """Scrape all leagues with data_source == 'sofascore' (Conference League)."""
-    results = {}
-    for slug, cfg in LEAGUES.items():
-        if cfg.get("data_source") == "sofascore":
-            data = await scrape_ss_league(slug)
-            if data:
-                results[slug] = data
-    return results
-
-
 # ── Lineups (on-demand) ───────────────────────────────────────────────────────
 
 async def fetch_lineups(ss_match_id: str) -> dict:
@@ -285,7 +181,7 @@ async def fetch_lineups(ss_match_id: str) -> dict:
 async def fetch_team_form(ss_team_id: str, league_slug: str) -> list[dict]:
     """
     Fetch last 5 matches for a team in a competition from SofaScore.
-    Used for Conference League (not on football-data.org free tier).
+    Used only for Conference League and AFC (not on football-data.org free tier).
     """
     cfg = LEAGUES.get(league_slug, {})
     tid = cfg.get("ss_id")
@@ -293,6 +189,7 @@ async def fetch_team_form(ss_team_id: str, league_slug: str) -> list[dict]:
         return []
 
     client = ss_client()
+    # Get current season for the tournament
     try:
         seasons_resp = await client.get(f"{SS_BASE}/unique-tournament/{tid}/seasons")
         if seasons_resp.status_code != 200:
@@ -320,25 +217,15 @@ async def fetch_team_form(ss_team_id: str, league_slug: str) -> list[dict]:
 
 async def fetch_match_events(ss_match_id: str) -> dict:
     """
-    Fetch match incidents from SofaScore: goals, cards, substitutions.
-    Endpoint: GET /event/{id}/incidents
-    Called on-demand. Cached 2 min for live, 60 min for finished.
+    Fetch match incidents: goals, cards, substitutions.
+    GET /event/{id}/incidents
+    Cached 2 min for live, 60 min for finished (TTL set by router).
 
     Returns:
     {
-        "goals": [
-            {"minute": "23'", "team": "home"|"away",
-             "scorer": "Name", "assist": "Name"|null,
-             "type": "goal"|"own_goal"|"penalty"}
-        ],
-        "cards": [
-            {"minute": "45+2'", "team": "home"|"away",
-             "player": "Name", "type": "yellow"|"red"|"yellow_red"}
-        ],
-        "substitutions": [
-            {"minute": "60'", "team": "home"|"away",
-             "player_in": "Name", "player_out": "Name"}
-        ]
+        "goals":         [{"minute","team","scorer","assist","type"}],
+        "cards":         [{"minute","team","player","type"}],
+        "substitutions": [{"minute","team","player_in","player_out"}]
     }
     """
     client = ss_client()
@@ -353,55 +240,39 @@ async def fetch_match_events(ss_match_id: str) -> dict:
         log.warning(f"SS incidents failed for {ss_match_id}: {ex}")
         return {}
 
-    goals         = []
-    cards         = []
-    substitutions = []
+    goals, cards, substitutions = [], [], []
 
     for inc in incidents:
         inc_type   = inc.get("incidentType", "")
         inc_class  = inc.get("incidentClass", "")
         minute     = inc.get("time")
-        added_time = inc.get("addedTime", 0)
-        full_min   = f"{minute}+{added_time}'" if added_time else f"{minute}'"
-        is_home    = inc.get("isHome", True)
-        team       = "home" if is_home else "away"
+        added      = inc.get("addedTime", 0)
+        full_min   = f"{minute}+{added}'" if added else f"{minute}'"
+        team       = "home" if inc.get("isHome", True) else "away"
 
         if inc_type == "goal":
-            player    = inc.get("player", {}).get("name", "")
-            assist    = inc.get("assist1", {}).get("name") if inc.get("assist1") else None
-            goal_type = "own_goal" if inc_class == "ownGoal" else \
-                        "penalty"  if inc_class == "penalty" else "goal"
             goals.append({
                 "minute": full_min,
                 "team":   team,
-                "scorer": player,
-                "assist": assist,
-                "type":   goal_type,
+                "scorer": inc.get("player", {}).get("name", ""),
+                "assist": inc.get("assist1", {}).get("name") if inc.get("assist1") else None,
+                "type":   "own_goal" if inc_class == "ownGoal" else
+                          "penalty"  if inc_class == "penalty"  else "goal",
             })
-
         elif inc_type == "card":
-            player    = inc.get("player", {}).get("name", "")
-            card_type = "yellow_red" if inc_class == "yellowRed" else \
-                        "red"        if inc_class == "red"       else "yellow"
             cards.append({
                 "minute": full_min,
                 "team":   team,
-                "player": player,
-                "type":   card_type,
+                "player": inc.get("player", {}).get("name", ""),
+                "type":   "yellow_red" if inc_class == "yellowRed" else
+                          "red"        if inc_class == "red"        else "yellow",
             })
-
         elif inc_type == "substitution":
-            player_in  = inc.get("playerIn",  {}).get("name", "")
-            player_out = inc.get("playerOut", {}).get("name", "")
             substitutions.append({
                 "minute":     full_min,
                 "team":       team,
-                "player_in":  player_in,
-                "player_out": player_out,
+                "player_in":  inc.get("playerIn",  {}).get("name", ""),
+                "player_out": inc.get("playerOut", {}).get("name", ""),
             })
 
-    return {
-        "goals":         goals,
-        "cards":         cards,
-        "substitutions": substitutions,
-    }
+    return {"goals": goals, "cards": cards, "substitutions": substitutions}

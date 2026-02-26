@@ -1,19 +1,18 @@
 """
 app/core/config.py  ── Goal2Gol Football API v3
 ═══════════════════════════════════════════════════════════════════════════════
-SOURCE ASSIGNMENT (no overlap per data type per league):
+SOURCE ASSIGNMENT:
 
-  football-data.org  →  standings, fixtures, results, scorers, squads, H2H
-                         for: PL, PD, BL1, SA, FL1, CL, EL, WC
-                         Team/competition logos from crests.football-data.org
+  football-data.org  →  fixtures, standings, scorers, squads, H2H
+                         PL, PD, BL1, SA, FL1, CL, EL, WC (free tier)
 
-  SofaScore JSON     →  live scores only (FD has no live endpoint)
-                         for: all European leagues + AFC + ISL
-                         Conference League fixtures/standings also from SofaScore
+  SofaScore JSON     →  live scores only (all tracked leagues)
+                         live scores use SS_TOURNAMENT_IDS lookup
 
-  indian_scraper     →  ISL (indiansuperleague.com HTML)
-                         IFL (Wikipedia HTML)
-                         AFC (Wikipedia HTML — SofaScore blocks server IPs)
+  TheSportsDB        →  fixtures + standings for leagues NOT on FD.org free:
+                         ISL (4346), IFL (4347), AFC (4659),
+                         Conference League (4744)
+                         Free public API — no key, no IP blocking
 
 ═══════════════════════════════════════════════════════════════════════════════
 """
@@ -27,7 +26,6 @@ FD_TOKEN   = "059eb2ab33c34001bccb46a3d029cb67"
 FD_BASE    = "https://api.football-data.org/v4"
 FD_HEADERS = {"X-Auth-Token": FD_TOKEN}
 
-# Free tier codes  →  slug mapping
 FD_LEAGUE_CODES: dict[str, str] = {
     "PL":  "premier-league",
     "PD":  "la-liga",
@@ -38,13 +36,10 @@ FD_LEAGUE_CODES: dict[str, str] = {
     "EL":  "europa-league",
     "WC":  "fifa-world-cup",
 }
-# Reverse: slug → code
 FD_SLUG_TO_CODE = {v: k for k, v in FD_LEAGUE_CODES.items()}
-
-# Rate limit: 10 req/min free tier → 7 s gap is safe
 FD_DELAY_S = 7.0
 
-# ── SofaScore (no auth — public JSON API) ─────────────────────────────────────
+# ── SofaScore ─────────────────────────────────────────────────────────────────
 SS_BASE = "https://www.sofascore.com/api/v1"
 SS_HEADERS = {
     "User-Agent": (
@@ -55,7 +50,7 @@ SS_HEADERS = {
     "Accept": "application/json",
 }
 
-# SofaScore unique-tournament IDs (used for live score scraping)
+# Used for LIVE score scraping only — maps SS tournament ID → our slug
 SS_TOURNAMENT_IDS: dict[int, str] = {
     17:    "premier-league",
     8:     "la-liga",
@@ -67,13 +62,13 @@ SS_TOURNAMENT_IDS: dict[int, str] = {
     17015: "conference-league",
     16:    "fifa-world-cup",
     329:   "afc",
-    955:   "isl",            # Indian Super League on SofaScore (live scores only)
+    955:   "isl",    # ISL on SofaScore — live scores only
 }
 
-# ── fixturedownload.com (kept for reference — replaced by indian_scraper) ─────
+# ── fixturedownload (kept for import compatibility, not actively used) ─────────
 FD_DOWNLOAD_BASE = "https://fixturedownload.com/feed/json"
 
-# ── Streaming platforms in Indian region ──────────────────────────────────────
+# ── Streaming platforms (India) ───────────────────────────────────────────────
 STREAMING: dict[str, dict] = {
     "premier-league":    {"platform": "JioHotstar",  "app": "JioHotstar"},
     "la-liga":           {"platform": "Sony LIV",    "app": "SonyLIV"},
@@ -91,93 +86,87 @@ STREAMING: dict[str, dict] = {
 
 # ── League registry ───────────────────────────────────────────────────────────
 LEAGUES: dict[str, dict] = {
+    # ── football-data.org leagues ─────────────────────────────────────────────
     "premier-league": {
         "name": "Premier League", "short": "EPL", "country": "England",
         "data_source": "football-data",
         "live_source": "sofascore",
-        "fd_code": "PL",
-        "ss_id": 17,
+        "fd_code": "PL", "ss_id": 17,
         "logo_url": "https://crests.football-data.org/PL.png",
     },
     "la-liga": {
         "name": "La Liga", "short": "LaLiga", "country": "Spain",
         "data_source": "football-data",
         "live_source": "sofascore",
-        "fd_code": "PD",
-        "ss_id": 8,
+        "fd_code": "PD", "ss_id": 8,
         "logo_url": "https://crests.football-data.org/PD.png",
     },
     "bundesliga": {
         "name": "Bundesliga", "short": "Bundes", "country": "Germany",
         "data_source": "football-data",
         "live_source": "sofascore",
-        "fd_code": "BL1",
-        "ss_id": 35,
+        "fd_code": "BL1", "ss_id": 35,
         "logo_url": "https://crests.football-data.org/BL1.png",
     },
     "serie-a": {
         "name": "Serie A", "short": "SerieA", "country": "Italy",
         "data_source": "football-data",
         "live_source": "sofascore",
-        "fd_code": "SA",
-        "ss_id": 23,
+        "fd_code": "SA", "ss_id": 23,
         "logo_url": "https://crests.football-data.org/SA.png",
     },
     "ligue-1": {
         "name": "Ligue 1", "short": "Ligue1", "country": "France",
         "data_source": "football-data",
         "live_source": "sofascore",
-        "fd_code": "FL1",
-        "ss_id": 34,
+        "fd_code": "FL1", "ss_id": 34,
         "logo_url": "https://crests.football-data.org/FL1.png",
     },
     "champions-league": {
         "name": "UEFA Champions League", "short": "UCL", "country": "Europe",
         "data_source": "football-data",
         "live_source": "sofascore",
-        "fd_code": "CL",
-        "ss_id": 7,
+        "fd_code": "CL", "ss_id": 7,
         "logo_url": "https://crests.football-data.org/CL.png",
     },
     "europa-league": {
         "name": "UEFA Europa League", "short": "UEL", "country": "Europe",
         "data_source": "football-data",
         "live_source": "sofascore",
-        "fd_code": "EL",
-        "ss_id": 679,
+        "fd_code": "EL", "ss_id": 679,
         "logo_url": "https://crests.football-data.org/EL.png",
     },
     "fifa-world-cup": {
         "name": "FIFA World Cup 2026", "short": "WC26", "country": "World",
         "data_source": "football-data",
         "live_source": "sofascore",
-        "fd_code": "WC",
-        "ss_id": 16,
+        "fd_code": "WC", "ss_id": 16,
         "logo_url": "https://crests.football-data.org/WC.png",
     },
+    # ── TheSportsDB leagues (fixtures + standings) ────────────────────────────
     "conference-league": {
         "name": "UEFA Conference League", "short": "UECL", "country": "Europe",
-        "data_source": "sofascore",        # not on FD free tier — fixtures/standings from SofaScore
+        "data_source": "thesportsdb",   # TSDB id 4744
         "live_source": "sofascore",
         "ss_id": 17015,
         "logo_url": "https://upload.wikimedia.org/wikipedia/en/f/f3/UEFA_Europa_Conference_League_logo.svg",
     },
     "isl": {
         "name": "Indian Super League", "short": "ISL", "country": "India",
-        "data_source": "indian_scraper",   # indiansuperleague.com HTML
+        "data_source": "thesportsdb",   # TSDB id 4346
         "live_source": "sofascore",
         "ss_id": 955,
         "logo_url": "https://upload.wikimedia.org/wikipedia/en/0/04/Indian_Super_League_logo.svg",
     },
     "ifl": {
         "name": "I-League", "short": "IFL", "country": "India",
-        "data_source": "indian_scraper",   # Wikipedia HTML
+        "data_source": "thesportsdb",   # TSDB id 4347
         "live_source": "none",
         "logo_url": "https://upload.wikimedia.org/wikipedia/en/3/35/I-League_logo.png",
     },
     "afc": {
         "name": "AFC Champions League Elite", "short": "ACLE", "country": "Asia",
-        "data_source": "indian_scraper",   # Wikipedia HTML (SofaScore blocks server IPs)
+        "data_source": "thesportsdb",   # TSDB id 4659
         "live_source": "sofascore",
         "ss_id": 329,
         "logo_url": "https://upload.wikimedia.org/wikipedia/en/b/b5/AFC_Champions_League_logo.svg",
@@ -214,12 +203,6 @@ FALLBACK_LOGOS: dict[str, str] = {
 
 
 def get_team_logo(name: str, api_crest: str = "") -> str:
-    """
-    Returns team logo URL.
-    Priority: API-provided crest → fallback table fuzzy match → empty string.
-    football-data.org always provides crests for European teams, so the
-    fallback table is mainly for ISL/IFL teams.
-    """
     if api_crest:
         return api_crest
     if not name:
