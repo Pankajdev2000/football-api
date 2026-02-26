@@ -11,13 +11,11 @@ Endpoints:
   GET /leagues/{slug}/fixtures       → upcoming only
   GET /leagues/{slug}/results        → recent only
 
-Source routing (no overlap):
-  football-data.org leagues → standings/fixtures/scorers from "fd_leagues" cache
-  Indian leagues            → from "indian_leagues" cache
-  Live matches              → always from "live_scores" cache (SofaScore)
-
-Fixtures on the league page deduplicate by kickoff time to prevent the same
-match appearing from multiple sources.
+Source routing:
+  football-data.org leagues  → "fd_leagues" cache
+  Indian leagues (ISL/IFL/AFC) → "indian_leagues" cache  (indian_scraper)
+  Conference League          → "sofascore_leagues" cache (SofaScore)
+  Live matches               → always from "live_scores" cache (SofaScore)
 ═══════════════════════════════════════════════════════════════════════════════
 """
 
@@ -36,6 +34,10 @@ def _indian_data() -> dict:
     return get_cache("indian_leagues") or {}
 
 
+def _ss_data() -> dict:
+    return get_cache("sofascore_leagues") or {}
+
+
 def _live_for(slug: str) -> list[dict]:
     """Pull live matches for a specific league from SofaScore cache."""
     return [
@@ -45,14 +47,14 @@ def _live_for(slug: str) -> list[dict]:
 
 
 def _league_cache(slug: str) -> dict:
-    """Return the cached data block for a league from the right cache."""
+    """Return the cached data block for a league from the correct cache."""
     cfg = LEAGUES.get(slug, {})
     src = cfg.get("data_source", "")
-    if src == "fixturedownload":
+    if src == "indian_scraper":
         return _indian_data().get(slug, {})
     if src == "sofascore":
-        # AFC and Conference League: fixtures/standings come from sofascore cache
-        return get_cache("sofascore_leagues") or {}
+        return _ss_data().get(slug, {})
+    # Default: football-data.org
     return _fd_data().get(slug, {})
 
 
@@ -61,7 +63,7 @@ def _dedup(matches: list[dict]) -> list[dict]:
     seen = set()
     out  = []
     for m in matches:
-        key = (m.get("kickoff_iso",""), m.get("home_team",""), m.get("away_team",""))
+        key = (m.get("kickoff_iso", ""), m.get("home_team", ""), m.get("away_team", ""))
         if key not in seen:
             seen.add(key)
             out.append(m)
@@ -91,24 +93,24 @@ async def get_league(slug: str):
     cfg   = LEAGUES[slug]
     block = _league_cache(slug)
 
-    live     = _live_for(slug)
-    upcoming = _dedup(block.get("upcoming", []))[:20]
-    recent   = _dedup(block.get("recent",   []))[:20]
+    live      = _live_for(slug)
+    upcoming  = _dedup(block.get("upcoming",  []))[:20]
+    recent    = _dedup(block.get("recent",    []))[:20]
     standings = block.get("standings", [])
     scorers   = block.get("scorers",   [])
 
     return {
-        "slug":       slug,
-        "name":       cfg["name"],
-        "short":      cfg["short"],
-        "country":    cfg["country"],
-        "logo_url":   cfg.get("logo_url", ""),
-        "streaming":  STREAMING.get(slug, {}),
-        "live":       live,
-        "upcoming":   upcoming,
-        "recent":     recent,
-        "standings":  standings,
-        "scorers":    scorers,
+        "slug":      slug,
+        "name":      cfg["name"],
+        "short":     cfg["short"],
+        "country":   cfg["country"],
+        "logo_url":  cfg.get("logo_url", ""),
+        "streaming": STREAMING.get(slug, {}),
+        "live":      live,
+        "upcoming":  upcoming,
+        "recent":    recent,
+        "standings": standings,
+        "scorers":   scorers,
     }
 
 
@@ -125,18 +127,15 @@ async def get_stats(slug: str):
     if slug not in LEAGUES:
         raise HTTPException(404, detail=f"League '{slug}' not found")
     block = _league_cache(slug)
-    return {
-        "league":  slug,
-        "scorers": block.get("scorers", []),
-    }
+    return {"league": slug, "scorers": block.get("scorers", [])}
 
 
 @router.get("/{slug}/fixtures")
 async def get_fixtures(slug: str, limit: int = 20):
     if slug not in LEAGUES:
         raise HTTPException(404, detail=f"League '{slug}' not found")
-    live    = _live_for(slug)
-    block   = _league_cache(slug)
+    live     = _live_for(slug)
+    block    = _league_cache(slug)
     upcoming = _dedup(block.get("upcoming", []))
     return {"live": live, "upcoming": upcoming[:limit]}
 

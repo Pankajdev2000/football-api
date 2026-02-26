@@ -8,10 +8,12 @@ SOURCE ASSIGNMENT (no overlap per data type per league):
                          Team/competition logos from crests.football-data.org
 
   SofaScore JSON     →  live scores only (FD has no live endpoint)
-                         for: all European leagues + AFC
+                         for: all European leagues + AFC + ISL
+                         Conference League fixtures/standings also from SofaScore
 
-  fixturedownload    →  ISL + IFL: fixtures, results (standings computed here)
-                         no overlap with FD.org (Indian leagues not on FD.org)
+  indian_scraper     →  ISL (indiansuperleague.com HTML)
+                         IFL (Wikipedia HTML)
+                         AFC (Wikipedia HTML — SofaScore blocks server IPs)
 
 ═══════════════════════════════════════════════════════════════════════════════
 """
@@ -53,7 +55,7 @@ SS_HEADERS = {
     "Accept": "application/json",
 }
 
-# SofaScore unique-tournament IDs (used only for live score scraping)
+# SofaScore unique-tournament IDs (used for live score scraping)
 SS_TOURNAMENT_IDS: dict[int, str] = {
     17:    "premier-league",
     8:     "la-liga",
@@ -65,33 +67,33 @@ SS_TOURNAMENT_IDS: dict[int, str] = {
     17015: "conference-league",
     16:    "fifa-world-cup",
     329:   "afc",
-    955:   "isl",       # Indian Super League on SofaScore
+    955:   "isl",            # Indian Super League on SofaScore (live scores only)
 }
 
-# ── fixturedownload.com ───────────────────────────────────────────────────────
+# ── fixturedownload.com (kept for reference — replaced by indian_scraper) ─────
 FD_DOWNLOAD_BASE = "https://fixturedownload.com/feed/json"
 
 # ── Streaming platforms in Indian region ──────────────────────────────────────
 STREAMING: dict[str, dict] = {
-    "premier-league":    {"platform": "Disney+ Hotstar", "app": "Hotstar"},
-    "la-liga":           {"platform": "Sony LIV",        "app": "SonyLIV"},
-    "bundesliga":        {"platform": "Sony LIV",        "app": "SonyLIV"},
-    "serie-a":           {"platform": "Sony LIV",        "app": "SonyLIV"},
-    "ligue-1":           {"platform": "Sony LIV",        "app": "SonyLIV"},
-    "champions-league":  {"platform": "Sony LIV",        "app": "SonyLIV"},
-    "europa-league":     {"platform": "Sony LIV",        "app": "SonyLIV"},
-    "conference-league": {"platform": "Sony LIV",        "app": "SonyLIV"},
-    "isl":               {"platform": "JioCinema",       "app": "JioCinema"},
-    "ifl":               {"platform": "FanCode",         "app": "FanCode"},
-    "fifa-world-cup":    {"platform": "Disney+ Hotstar", "app": "Hotstar"},
-    "afc":               {"platform": "Sony LIV",        "app": "SonyLIV"},
+    "premier-league":    {"platform": "JioHotstar",  "app": "JioHotstar"},
+    "la-liga":           {"platform": "Sony LIV",    "app": "SonyLIV"},
+    "bundesliga":        {"platform": "Sony LIV",    "app": "SonyLIV"},
+    "serie-a":           {"platform": "Sony LIV",    "app": "SonyLIV"},
+    "ligue-1":           {"platform": "Sony LIV",    "app": "SonyLIV"},
+    "champions-league":  {"platform": "Sony LIV",    "app": "SonyLIV"},
+    "europa-league":     {"platform": "Sony LIV",    "app": "SonyLIV"},
+    "conference-league": {"platform": "Sony LIV",    "app": "SonyLIV"},
+    "isl":               {"platform": "JioCinema",   "app": "JioCinema"},
+    "ifl":               {"platform": "FanCode",     "app": "FanCode"},
+    "fifa-world-cup":    {"platform": "JioHotstar",  "app": "JioHotstar"},
+    "afc":               {"platform": "Sony LIV",    "app": "SonyLIV"},
 }
 
 # ── League registry ───────────────────────────────────────────────────────────
 LEAGUES: dict[str, dict] = {
     "premier-league": {
         "name": "Premier League", "short": "EPL", "country": "England",
-        "data_source": "football-data",   # fixtures / standings / scorers
+        "data_source": "football-data",
         "live_source": "sofascore",
         "fd_code": "PL",
         "ss_id": 17,
@@ -155,60 +157,59 @@ LEAGUES: dict[str, dict] = {
     },
     "conference-league": {
         "name": "UEFA Conference League", "short": "UECL", "country": "Europe",
-        "data_source": "sofascore",        # not on FD free tier
+        "data_source": "sofascore",        # not on FD free tier — fixtures/standings from SofaScore
         "live_source": "sofascore",
         "ss_id": 17015,
         "logo_url": "https://upload.wikimedia.org/wikipedia/en/f/f3/UEFA_Europa_Conference_League_logo.svg",
     },
     "isl": {
         "name": "Indian Super League", "short": "ISL", "country": "India",
-        "data_source": "fixturedownload",
-        "live_source": "sofascore",   # SofaScore does carry ISL live
-        "ss_id": 955,                 # SofaScore tournament ID for ISL
-        "fd_download_id": "isl-2024-2025",   # ✅ correct season slug
+        "data_source": "indian_scraper",   # indiansuperleague.com HTML
+        "live_source": "sofascore",
+        "ss_id": 955,
         "logo_url": "https://upload.wikimedia.org/wikipedia/en/0/04/Indian_Super_League_logo.svg",
     },
     "ifl": {
         "name": "I-League", "short": "IFL", "country": "India",
-        "data_source": "fixturedownload",
+        "data_source": "indian_scraper",   # Wikipedia HTML
         "live_source": "none",
-        "fd_download_id": "i-league-2024-2025",  # ✅ correct season slug
         "logo_url": "https://upload.wikimedia.org/wikipedia/en/3/35/I-League_logo.png",
     },
     "afc": {
         "name": "AFC Champions League Elite", "short": "ACLE", "country": "Asia",
-        "data_source": "sofascore",
+        "data_source": "indian_scraper",   # Wikipedia HTML (SofaScore blocks server IPs)
         "live_source": "sofascore",
         "ss_id": 329,
         "logo_url": "https://upload.wikimedia.org/wikipedia/en/b/b5/AFC_Champions_League_logo.svg",
     },
 }
 
-# ── Fallback team logos (used when API response has no crest) ─────────────────
-# Keys are lowercase partial names. get_team_logo() does a fuzzy match.
+# ── Fallback team logos ───────────────────────────────────────────────────────
 FALLBACK_LOGOS: dict[str, str] = {
     # ISL
-    "mumbai city":     "https://upload.wikimedia.org/wikipedia/en/2/2e/Mumbai_City_FC_Logo.svg",
-    "bengaluru":       "https://upload.wikimedia.org/wikipedia/en/b/b1/Bengaluru_FC_Logo.svg",
-    "mohun bagan":     "https://upload.wikimedia.org/wikipedia/en/5/58/ATK_Mohun_Bagan_FC_Logo.svg",
-    "kerala blasters": "https://upload.wikimedia.org/wikipedia/en/d/d9/Kerala_Blasters_FC_logo.svg",
-    "fc goa":          "https://upload.wikimedia.org/wikipedia/en/a/a5/FC_Goa_Logo.svg",
-    "hyderabad":       "https://upload.wikimedia.org/wikipedia/en/0/0d/Hyderabad_FC_Logo.svg",
-    "chennaiyin":      "https://upload.wikimedia.org/wikipedia/en/2/2d/Chennaiyin_FC_Logo.svg",
-    "east bengal":     "https://upload.wikimedia.org/wikipedia/en/8/8e/East_Bengal_FC_logo.svg",
-    "odisha":          "https://upload.wikimedia.org/wikipedia/en/0/01/Odisha_FC_Logo.svg",
-    "jamshedpur":      "https://upload.wikimedia.org/wikipedia/en/2/2a/Jamshedpur_FC_Logo.svg",
-    "northeast united":"https://upload.wikimedia.org/wikipedia/en/8/86/NorthEast_United_FC_Logo.svg",
-    "ne united":       "https://upload.wikimedia.org/wikipedia/en/8/86/NorthEast_United_FC_Logo.svg",
-    "punjab":          "https://upload.wikimedia.org/wikipedia/en/f/f5/Punjab_FC_Logo.svg",
+    "mumbai city":         "https://upload.wikimedia.org/wikipedia/en/2/2e/Mumbai_City_FC_Logo.svg",
+    "bengaluru":           "https://upload.wikimedia.org/wikipedia/en/b/b1/Bengaluru_FC_Logo.svg",
+    "mohun bagan":         "https://upload.wikimedia.org/wikipedia/en/5/58/ATK_Mohun_Bagan_FC_Logo.svg",
+    "kerala blasters":     "https://upload.wikimedia.org/wikipedia/en/d/d9/Kerala_Blasters_FC_logo.svg",
+    "fc goa":              "https://upload.wikimedia.org/wikipedia/en/a/a5/FC_Goa_Logo.svg",
+    "hyderabad":           "https://upload.wikimedia.org/wikipedia/en/0/0d/Hyderabad_FC_Logo.svg",
+    "chennaiyin":          "https://upload.wikimedia.org/wikipedia/en/2/2d/Chennaiyin_FC_Logo.svg",
+    "east bengal":         "https://upload.wikimedia.org/wikipedia/en/8/8e/East_Bengal_FC_logo.svg",
+    "odisha":              "https://upload.wikimedia.org/wikipedia/en/0/01/Odisha_FC_Logo.svg",
+    "jamshedpur":          "https://upload.wikimedia.org/wikipedia/en/2/2a/Jamshedpur_FC_Logo.svg",
+    "northeast united":    "https://upload.wikimedia.org/wikipedia/en/8/86/NorthEast_United_FC_Logo.svg",
+    "ne united":           "https://upload.wikimedia.org/wikipedia/en/8/86/NorthEast_United_FC_Logo.svg",
+    "punjab":              "https://upload.wikimedia.org/wikipedia/en/f/f5/Punjab_FC_Logo.svg",
+    "inter kashi":         "https://upload.wikimedia.org/wikipedia/en/0/04/Indian_Super_League_logo.svg",
+    "sporting club delhi": "https://upload.wikimedia.org/wikipedia/en/0/04/Indian_Super_League_logo.svg",
     # IFL
-    "mohammedan":      "https://upload.wikimedia.org/wikipedia/en/6/6f/Mohammedan_SC_logo.svg",
-    "real kashmir":    "https://upload.wikimedia.org/wikipedia/en/5/5e/Real_Kashmir_FC.svg",
-    "shillong lajong": "https://upload.wikimedia.org/wikipedia/en/9/9e/Shillong_Lajong_FC_Logo.svg",
-    "gokulam":         "https://upload.wikimedia.org/wikipedia/en/8/84/Gokulam_Kerala_FC_logo.svg",
-    "sreenidi":        "https://upload.wikimedia.org/wikipedia/en/0/03/Sreenidi_Deccan_FC.png",
-    "churchill":       "https://upload.wikimedia.org/wikipedia/en/6/69/Churchill_Brothers_FC_logo.png",
-    "minerva":         "https://upload.wikimedia.org/wikipedia/en/1/11/Minerva_Punjab_FC_Logo.png",
+    "mohammedan":          "https://upload.wikimedia.org/wikipedia/en/6/6f/Mohammedan_SC_logo.svg",
+    "real kashmir":        "https://upload.wikimedia.org/wikipedia/en/5/5e/Real_Kashmir_FC.svg",
+    "shillong lajong":     "https://upload.wikimedia.org/wikipedia/en/9/9e/Shillong_Lajong_FC_Logo.svg",
+    "gokulam":             "https://upload.wikimedia.org/wikipedia/en/8/84/Gokulam_Kerala_FC_logo.svg",
+    "sreenidi":            "https://upload.wikimedia.org/wikipedia/en/0/03/Sreenidi_Deccan_FC.png",
+    "churchill":           "https://upload.wikimedia.org/wikipedia/en/6/69/Churchill_Brothers_FC_logo.png",
+    "minerva":             "https://upload.wikimedia.org/wikipedia/en/1/11/Minerva_Punjab_FC_Logo.png",
 }
 
 

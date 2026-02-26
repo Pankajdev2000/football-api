@@ -5,12 +5,13 @@ On-demand endpoints (with local TTL cache to prevent hammering):
 
   GET /matches/h2h?match_id={fd_match_id}     → H2H from football-data.org
   GET /matches/{match_id}/lineups             → lineups from SofaScore
+  GET /matches/{match_id}/events              → goals/cards/subs from SofaScore
   GET /teams/{team_id}/squad                  → squad from football-data.org
   GET /teams/{team_id}/form?league=slug       → last 5 in competition
-  GET /teams/{team_id}/next                   → next 5 fixtures
+  GET /teams/{team_id}/next                   → next N fixtures
 
 H2H uses football-data.org match IDs (from FD fixtures cache).
-Lineups use SofaScore match IDs (from live scores cache).
+Lineups + Events use SofaScore match IDs (from live scores cache).
 
 All on-demand results are cached locally for their TTL to avoid re-fetching
 on every screen open.
@@ -25,7 +26,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from app.core.cache import get_cache
 from app.scrapers.football_data import scrape_h2h, scrape_squad, scrape_team_matches
-from app.scrapers.sofascore import fetch_lineups, fetch_team_form
+from app.scrapers.sofascore import fetch_lineups, fetch_team_form, fetch_match_events
 from app.core.config import LEAGUES
 
 log    = logging.getLogger("matches_router")
@@ -44,13 +45,12 @@ def _set(key: str, data):
     _cache[key] = {"data": data, "ts": time.time()}
 
 
-# ── H2H ──────────────────────────────────────────────────────────────────────
+# ── H2H ───────────────────────────────────────────────────────────────────────
 
 @router.get("/matches/h2h")
 async def get_h2h(match_id: str = Query(..., description="football-data.org match ID")):
     """
     Last 5 head-to-head matches via football-data.org.
-    Uses the /matches/{id}/head2head endpoint — returns all competitions.
     Cached 60 minutes (H2H rarely changes).
     """
     key = f"h2h:{match_id}"
@@ -61,6 +61,44 @@ async def get_h2h(match_id: str = Query(..., description="football-data.org matc
     matches = await scrape_h2h(match_id)
     _set(key, matches)
     return matches
+
+
+# ── Match events ──────────────────────────────────────────────────────────────
+
+@router.get("/matches/{match_id}/events")
+async def get_match_events(match_id: str):
+    """
+    Match events from SofaScore: goals, cards, substitutions.
+    Pass the SofaScore match_id (from /scores/live response).
+
+    Cache TTL:
+      - Live match  → 2 minutes  (events change every few minutes)
+      - Finished    → 60 minutes (static once the match ends)
+
+    Response:
+    {
+        "goals":         [{"minute","team","scorer","assist","type"}],
+        "cards":         [{"minute","team","player","type"}],
+        "substitutions": [{"minute","team","player_in","player_out"}]
+    }
+    """
+    key = f"events:{match_id}"
+
+    # Use shorter TTL if match is currently live
+    live_matches = get_cache("live_scores") or []
+    is_live = any(m.get("match_id") == match_id for m in live_matches)
+    ttl = 120 if is_live else 3600
+
+    cached = _get(key, ttl)
+    if cached is not None:
+        return cached
+
+    data = await fetch_match_events(match_id)
+    if not data:
+        raise HTTPException(404, detail="Events not available for this match")
+
+    _set(key, data)
+    return data
 
 
 # ── Lineups ───────────────────────────────────────────────────────────────────
@@ -85,7 +123,7 @@ async def get_lineups(match_id: str):
     return data
 
 
-# ── Squad ─────────────────────────────────────────────────────────────────────
+# ── Squad ──────────────────────────────────────────────────────────────────────
 
 @router.get("/teams/{team_id}/squad")
 async def get_squad(team_id: str):
@@ -117,9 +155,8 @@ async def get_team_form(
 ):
     """
     Last 5 matches for a team in a competition.
-
     For football-data.org leagues: uses FD team matches endpoint.
-    For SofaScore-only leagues (conference-league, afc): uses SofaScore.
+    For SofaScore-only leagues (conference-league): uses SofaScore.
     Cached 10 minutes.
     """
     key = f"form:{team_id}:{league}"
@@ -127,16 +164,14 @@ async def get_team_form(
     if cached is not None:
         return cached
 
-    cfg = LEAGUES.get(league, {})
+    cfg      = LEAGUES.get(league, {})
     data_src = source or cfg.get("data_source", "football-data")
 
     if data_src == "football-data":
-        # FD returns matches across all competitions — filter to this league
         all_matches = await scrape_team_matches(team_id)
         form = [m for m in all_matches if m.get("league_slug") == league and m["status"] == "finished"]
         form = sorted(form, key=lambda m: m["kickoff_iso"], reverse=True)[:5]
     else:
-        # SofaScore for conference-league, afc
         form = await fetch_team_form(team_id, league)
 
     _set(key, form)
@@ -153,8 +188,8 @@ async def get_team_next(
 ):
     """
     Next N upcoming fixtures for a team.
-    For FD.org teams: fetches from team matches endpoint.
-    Also checks Indian league cache for Indian team IDs.
+    For FD.org teams (numeric IDs): fetches from FD team matches endpoint.
+    For Indian teams (name-based): searches the indian_leagues cache.
     Cached 30 minutes.
     """
     key = f"next:{team_id}:{league}"
@@ -162,8 +197,8 @@ async def get_team_next(
     if cached is not None:
         return cached
 
-    # For FD.org teams — their IDs are numeric strings
     if team_id.isdigit():
+        # football-data.org team
         all_matches = await scrape_team_matches(team_id)
         upcoming = [
             m for m in all_matches
@@ -172,13 +207,13 @@ async def get_team_next(
         upcoming.sort(key=lambda m: m["kickoff_iso"])
         result = upcoming[:limit]
     else:
-        # Indian team — search all upcoming from cache
+        # Indian team — search by name in the indian_leagues cache
         ind = get_cache("indian_leagues") or {}
         upcoming = []
         for slug, data in ind.items():
             for m in data.get("upcoming", []):
-                if team_id.lower() in m.get("home_team","").lower() or \
-                   team_id.lower() in m.get("away_team","").lower():
+                if team_id.lower() in m.get("home_team", "").lower() or \
+                   team_id.lower() in m.get("away_team", "").lower():
                     upcoming.append(m)
         upcoming.sort(key=lambda m: m["kickoff_iso"])
         result = upcoming[:limit]

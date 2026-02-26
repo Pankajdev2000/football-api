@@ -11,12 +11,14 @@ Adaptive background scheduler with strict guarantees:
        17:00–06:00 IST (active football hours) → 3 minutes
        06:00–17:00 IST (off-peak)              → 7 minutes
   6. football-data.org (rate-limited) → separate 30-minute cycle
-  7. Indian leagues (fixturedownload) → separate 60-minute cycle
+  7. Indian leagues (HTML scrapers)   → separate 60-minute cycle
+  8. Conference League (SofaScore)    → separate 30-minute cycle
 
 Timing design:
-  • Live cycle (every 3–7 min):  SofaScore live scores only
-  • FD.org cycle (every 30 min): fixtures, standings, scorers for EU leagues
-  • Indian cycle (every 60 min): ISL + IFL from fixturedownload
+  • Live cycle (every 3–7 min):   SofaScore live scores only
+  • FD.org cycle (every 30 min):  fixtures, standings, scorers for EU leagues
+  • Indian cycle (every 60 min):  ISL + IFL + AFC from HTML scrapers
+  • SS cycle (every 30 min):      Conference League fixtures/standings
 ═══════════════════════════════════════════════════════════════════════════════
 """
 
@@ -29,23 +31,23 @@ from app.core.cache import set_cache, get_cache
 from app.core.config import IST
 from app.scrapers.sofascore import scrape_live_scores, scrape_all_ss_leagues
 from app.scrapers.football_data import scrape_all_fd_leagues
-from app.scrapers.fixturedownload import scrape_all_indian_leagues
+from app.scrapers.indian_scraper import scrape_all_indian_leagues
 
 log = logging.getLogger("scheduler")
 
 # ── Intervals ─────────────────────────────────────────────────────────────────
-ACTIVE_INTERVAL_S   = 3 * 60       # 3 min  — live football hours
-OFFPEAK_INTERVAL_S  = 7 * 60       # 7 min  — quiet hours
-FD_INTERVAL_S       = 30 * 60      # 30 min — football-data.org (rate limited)
-INDIAN_INTERVAL_S   = 60 * 60      # 60 min — Indian leagues (rarely change)
-SS_LEAGUES_INTERVAL_S = 30 * 60   # 30 min — AFC / Conference League (SofaScore)
-MAX_CYCLE_S         = 120          # if scrape exceeds this → skip next live cycle
+ACTIVE_INTERVAL_S     = 3 * 60      # 3 min  — live football hours
+OFFPEAK_INTERVAL_S    = 7 * 60      # 7 min  — quiet hours
+FD_INTERVAL_S         = 30 * 60     # 30 min — football-data.org (rate limited)
+INDIAN_INTERVAL_S     = 60 * 60     # 60 min — Indian leagues (HTML scraping)
+SS_LEAGUES_INTERVAL_S = 30 * 60     # 30 min — Conference League (SofaScore)
+MAX_CYCLE_S           = 120         # if scrape exceeds this → skip next live cycle
 
 # ── State ─────────────────────────────────────────────────────────────────────
-_scrape_lock    = asyncio.Lock()
-_running        = False
-_last_fd_scrape = 0.0
-_last_indian    = 0.0
+_scrape_lock     = asyncio.Lock()
+_running         = False
+_last_fd_scrape  = 0.0
+_last_indian     = 0.0
 _last_ss_leagues = 0.0
 
 
@@ -90,12 +92,12 @@ async def _job_fd_leagues() -> None:
 
 
 async def _job_indian_leagues() -> None:
-    """fixturedownload.com (ISL + IFL) — runs every 60 min."""
+    """ISL + IFL + AFC from HTML scrapers — runs every 60 min."""
     global _last_indian
     if time.time() - _last_indian < INDIAN_INTERVAL_S:
         return
 
-    log.info("Starting Indian leagues scrape...")
+    log.info("Starting Indian leagues scrape (ISL/IFL/AFC)...")
     try:
         data = await scrape_all_indian_leagues()
         if data:
@@ -106,15 +108,13 @@ async def _job_indian_leagues() -> None:
         log.error(f"Indian leagues scrape error: {ex}")
 
 
-# ── Main cycle ────────────────────────────────────────────────────────────────
-
 async def _job_ss_leagues() -> None:
-    """SofaScore fixtures/standings for AFC + Conference League — runs every 30 min."""
+    """Conference League fixtures/standings from SofaScore — runs every 30 min."""
     global _last_ss_leagues
     if time.time() - _last_ss_leagues < SS_LEAGUES_INTERVAL_S:
         return
 
-    log.info("Starting SofaScore leagues scrape (AFC / Conference League)...")
+    log.info("Starting SofaScore leagues scrape (Conference League)...")
     try:
         data = await scrape_all_ss_leagues()
         if data:
@@ -124,6 +124,8 @@ async def _job_ss_leagues() -> None:
     except Exception as ex:
         log.error(f"SofaScore leagues scrape error: {ex}")
 
+
+# ── Main cycle ────────────────────────────────────────────────────────────────
 
 async def _run_cycle() -> None:
     if _scrape_lock.locked():
