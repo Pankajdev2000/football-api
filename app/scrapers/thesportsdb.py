@@ -28,10 +28,9 @@ import pytz
 
 from app.core.config import LEAGUES, STREAMING, get_team_logo, IST
 from app.core.http_client import plain_client
+from app.scrapers.sofascore import fetch_ss_scorers
 
 log = logging.getLogger("thesportsdb")
-
-TSDB_BASE = "https://www.thesportsdb.com/api/v1/json/3"
 
 TSDB_BASE = "https://www.thesportsdb.com/api/v1/json/3"
 
@@ -228,7 +227,6 @@ async def scrape_tsdb_league(league_slug: str) -> dict:
     ss_id = cfg_league.get("ss_id")
     if ss_id:
         try:
-            from app.scrapers.sofascore import fetch_ss_scorers
             scorers = await fetch_ss_scorers(league_slug, ss_id)
             log.info(f"TSDB {league_slug}: {len(scorers)} scorers from SofaScore")
         except Exception as ex:

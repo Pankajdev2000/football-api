@@ -149,7 +149,13 @@ async def scrape_league_matches(league_slug: str) -> dict:
     if not code:
         return {"upcoming": [], "recent": []}
 
-    data = await _get(f"/competitions/{code}/matches")
+    # Use a date window: 14 days back to 60 days forward
+    # This avoids fetching all 380 matches of a season (rate limit friendly)
+    now     = datetime.now(timezone.utc)
+    d_from  = (now - timedelta(days=14)).strftime("%Y-%m-%d")
+    d_to    = (now + timedelta(days=60)).strftime("%Y-%m-%d")
+
+    data = await _get(f"/competitions/{code}/matches?dateFrom={d_from}&dateTo={d_to}")
     await asyncio.sleep(FD_DELAY_S)
 
     if not data:

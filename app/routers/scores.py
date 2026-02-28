@@ -3,7 +3,7 @@ app/routers/scores.py
 Endpoints:
   GET /scores/live              → all live matches (SofaScore)
   GET /scores/live?league=slug  → filtered
-  GET /scores/upcoming          → all upcoming fixtures (FD.org + Indian)
+  GET /scores/upcoming          → all upcoming fixtures (FD.org + TSDB)
   GET /scores/upcoming?league=  → filtered, sorted by kickoff time
   GET /scores/recent            → recent results (last 14 days)
 
@@ -18,20 +18,20 @@ router = APIRouter(prefix="/scores", tags=["scores"])
 
 
 def _all_upcoming() -> list[dict]:
-    fd   = get_cache("fd_leagues") or {}
-    ind  = get_cache("indian_leagues") or {}
+    fd   = get_cache("fd_leagues")  or {}
+    tsdb = get_cache("tsdb_leagues") or {}   # FIX: was "indian_leagues"
     out  = []
-    for league_data in {**fd, **ind}.values():
+    for league_data in {**fd, **tsdb}.values():
         out.extend(league_data.get("upcoming", []))
     out.sort(key=lambda m: m.get("kickoff_iso", ""))
     return out
 
 
 def _all_recent() -> list[dict]:
-    fd  = get_cache("fd_leagues") or {}
-    ind = get_cache("indian_leagues") or {}
-    out = []
-    for league_data in {**fd, **ind}.values():
+    fd   = get_cache("fd_leagues")  or {}
+    tsdb = get_cache("tsdb_leagues") or {}   # FIX: was "indian_leagues"
+    out  = []
+    for league_data in {**fd, **tsdb}.values():
         out.extend(league_data.get("recent", []))
     out.sort(key=lambda m: m.get("kickoff_iso", ""), reverse=True)
     return out

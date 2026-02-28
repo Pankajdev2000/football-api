@@ -14,6 +14,7 @@ Also provides:
 
 import asyncio
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -108,6 +109,7 @@ async def scrape_live_scores() -> list[dict]:
     Checks today ±1 day to handle IST/UTC date boundaries.
     Returns only LIVE and HALFTIME matches.
     """
+    from app.core.http_client import rotate_ss_client
     client = ss_client()
     live   = []
     today  = datetime.now(timezone.utc).date()
@@ -117,7 +119,13 @@ async def scrape_live_scores() -> list[dict]:
         url = f"{SS_BASE}/sport/football/scheduled-events/{date_str}"
         try:
             resp = await client.get(url)
+            if resp.status_code == 403:
+                log.warning(f"SS 403 for {date_str} — rotating client and retrying")
+                client = rotate_ss_client()
+                await asyncio.sleep(1.0)
+                resp = await client.get(url)
             if resp.status_code != 200:
+                log.warning(f"SS HTTP {resp.status_code} for {date_str}")
                 continue
             events = resp.json().get("events", [])
         except Exception as ex:
@@ -345,7 +353,6 @@ async def fetch_match_stats(ss_match_id: str) -> dict:
                     return None
                 s = str(val).replace("%", "").strip()
                 # Take the first number before any space/paren
-                import re
                 m = re.match(r"[\d.]+", s)
                 if m:
                     n = m.group()
@@ -405,10 +412,8 @@ async def fetch_player_profile(player_id: str) -> dict:
         "first_name":   p.get("firstName", p.get("name", "").split()[0] if p.get("name") else ""),
         "nationality":  country.get("name", ""),
         "position":     position,
-        "date_of_birth": p.get("dateOfBirthTimestamp") and
-                         __import__("datetime").datetime.fromtimestamp(
-                             p["dateOfBirthTimestamp"]
-                         ).strftime("%Y-%m-%d") or "",
+        "date_of_birth": datetime.fromtimestamp(p["dateOfBirthTimestamp"]).strftime("%Y-%m-%d")
+                         if p.get("dateOfBirthTimestamp") else "",
         "shirt_no":     p.get("jerseyNumber"),
         "team":         team.get("name", ""),
         "team_id":      str(team.get("id", "")),

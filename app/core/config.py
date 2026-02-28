@@ -47,7 +47,16 @@ SS_HEADERS = {
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/124.0.0.0 Safari/537.36"
     ),
-    "Accept": "application/json",
+    "Accept":          "application/json, text/plain, */*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Referer":         "https://www.sofascore.com/",
+    "Origin":          "https://www.sofascore.com",
+    "Cache-Control":   "no-cache",
+    "Pragma":          "no-cache",
+    "Sec-Fetch-Dest":  "empty",
+    "Sec-Fetch-Mode":  "cors",
+    "Sec-Fetch-Site":  "same-origin",
 }
 
 # Used for LIVE score scraping only — maps SS tournament ID → our slug
