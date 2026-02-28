@@ -56,3 +56,7 @@ async def scrape_ifl():
 
 async def scrape_afc():
     return await _scrape_table("afc-champions-league")
+    
+    # Backward-compatible alias for scheduler
+async def scrape_isl_standings():
+    return await scrape_isl()
