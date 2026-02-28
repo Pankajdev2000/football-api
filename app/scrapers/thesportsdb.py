@@ -41,6 +41,7 @@ TSDB_BASE = "https://www.thesportsdb.com/api/v1/json/3"
 # causing confusion even though the guard in scrape_all_tsdb_leagues() prevented
 # double-scraping. Removed to keep this table unambiguous.
 TSDB_LEAGUES: dict[str, dict] = {
+    "europa-league":     {"id": 4335, "season": "2024-2025"},
     "isl":               {"id": 4346, "season": "2024-2025"},
     "ifl":               {"id": 4347, "season": "2024-2025"},
     "afc":               {"id": 4659, "season": "2024-2025"},

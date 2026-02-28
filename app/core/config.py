@@ -41,11 +41,11 @@ FD_LEAGUE_CODES: dict[str, str] = {
     "SA":  "serie-a",
     "FL1": "ligue-1",
     "CL":  "champions-league",
-    "EL":  "europa-league",
+    # "EL": "europa-league",  -- paid tier only, removed
     "WC":  "fifa-world-cup",
 }
 FD_SLUG_TO_CODE = {v: k for k, v in FD_LEAGUE_CODES.items()}
-FD_DELAY_S = 7.0
+FD_DELAY_S = 8.0
 
 # ── SofaScore ─────────────────────────────────────────────────────────────────
 SS_BASE = "https://www.sofascore.com/api/v1"
@@ -148,7 +148,7 @@ LEAGUES: dict[str, dict] = {
     },
     "europa-league": {
         "name": "UEFA Europa League", "short": "UEL", "country": "Europe",
-        "data_source": "football-data",
+        "data_source": "thesportsdb",
         "live_source": "sofascore",
         "fd_code": "EL", "ss_id": 679,
         "logo_url": "https://crests.football-data.org/EL.png",
