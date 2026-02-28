@@ -20,7 +20,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from app.core.cache import get_cache
 from app.scrapers.football_data import scrape_h2h, scrape_squad, scrape_team_matches
-from app.scrapers.sofascore import fetch_lineups, fetch_team_form, fetch_match_events
+from app.scrapers.sofascore import fetch_lineups, fetch_team_form, fetch_match_events, fetch_match_stats
 from app.core.config import LEAGUES
 
 log    = logging.getLogger("matches_router")
@@ -160,3 +160,23 @@ async def get_team_next(
 
     _set(key, result)
     return result
+
+
+@router.get("/matches/{match_id}/stats")
+async def get_match_stats(match_id: str):
+    """
+    Match statistics: possession, shots, corners, fouls, passes etc.
+    match_id = SofaScore event ID.
+    TTL: 2 min if live, 60 min if finished.
+    """
+    key     = f"stats:{match_id}"
+    is_live = any(m.get("match_id") == match_id for m in (get_cache("live_scores") or []))
+    ttl     = 120 if is_live else 3600
+    cached  = _get(key, ttl)
+    if cached is not None:
+        return cached
+    data = await fetch_match_stats(match_id)
+    if not data:
+        raise HTTPException(404, detail="Stats not available for this match yet")
+    _set(key, data)
+    return data

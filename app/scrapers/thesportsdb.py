@@ -33,6 +33,8 @@ log = logging.getLogger("thesportsdb")
 
 TSDB_BASE = "https://www.thesportsdb.com/api/v1/json/3"
 
+TSDB_BASE = "https://www.thesportsdb.com/api/v1/json/3"
+
 # league slug → TheSportsDB league ID + current season string
 TSDB_LEAGUES: dict[str, dict] = {
     "isl":               {"id": 4346, "season": "2024-2025"},
@@ -220,12 +222,24 @@ async def scrape_tsdb_league(league_slug: str) -> dict:
 
     log.info(f"TSDB {league_slug}: {len(upcoming)} upcoming, {len(recent)} recent, {len(standings)} standings rows")
 
+    # Fetch scorers from SofaScore for leagues that have an ss_id
+    scorers = []
+    cfg_league = LEAGUES.get(league_slug, {})
+    ss_id = cfg_league.get("ss_id")
+    if ss_id:
+        try:
+            from app.scrapers.sofascore import fetch_ss_scorers
+            scorers = await fetch_ss_scorers(league_slug, ss_id)
+            log.info(f"TSDB {league_slug}: {len(scorers)} scorers from SofaScore")
+        except Exception as ex:
+            log.warning(f"SS scorers fetch failed for {league_slug}: {ex}")
+
     return {
         "live":      [],
         "upcoming":  upcoming[:25],
         "recent":    recent[:20],
         "standings": standings,
-        "scorers":   [],
+        "scorers":   scorers,
     }
 
 

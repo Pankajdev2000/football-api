@@ -75,8 +75,8 @@ def _build_match(event: dict, league_slug: str) -> dict:
         "home_team_short": home.get("shortName", home.get("name", "")),
         "away_team":       away.get("name", ""),
         "away_team_short": away.get("shortName", away.get("name", "")),
-        "home_logo":       get_team_logo(home.get("name", "")),
-        "away_logo":       get_team_logo(away.get("name", "")),
+        "home_logo":       f"https://api.sofascore.com/api/v1/team/{home.get('id','')}/image" if home.get('id') else get_team_logo(home.get("name", "")),
+        "away_logo":       f"https://api.sofascore.com/api/v1/team/{away.get('id','')}/image" if away.get('id') else get_team_logo(away.get("name", "")),
         "home_team_id":    str(home.get("id", "")),
         "away_team_id":    str(away.get("id", "")),
         "score": {
@@ -276,3 +276,518 @@ async def fetch_match_events(ss_match_id: str) -> dict:
             })
 
     return {"goals": goals, "cards": cards, "substitutions": substitutions}
+
+
+# ── Match stats (on-demand) ───────────────────────────────────────────────────
+
+async def fetch_match_stats(ss_match_id: str) -> dict:
+    """
+    Fetch match statistics: possession, shots, corners, fouls etc.
+    GET /event/{id}/statistics
+    Cached by the matches router (10 min live, 60 min finished).
+
+    Returns:
+    {
+      "home": {"possession": 55, "shots": 12, "shots_on_target": 5,
+               "corners": 6, "fouls": 11, "yellow_cards": 2, "red_cards": 0,
+               "offsides": 2, "passes": 432, "pass_accuracy": 87,
+               "tackles": 18, "saves": 4},
+      "away": {...}
+    }
+    """
+    client = ss_client()
+    url = f"{SS_BASE}/event/{ss_match_id}/statistics"
+    try:
+        resp = await client.get(url)
+        if resp.status_code != 200:
+            log.warning(f"SS stats HTTP {resp.status_code} for {ss_match_id}")
+            return {}
+        data = resp.json()
+    except Exception as ex:
+        log.warning(f"SS stats failed for {ss_match_id}: {ex}")
+        return {}
+
+    home_stats: dict = {}
+    away_stats: dict = {}
+
+    # SofaScore returns a list of stat groups, each with "statisticsItems"
+    # Key map: SS key → our key
+    key_map = {
+        "Ball possession":    "possession",
+        "Total shots":        "shots",
+        "Shots on target":    "shots_on_target",
+        "Shots off target":   "shots_off_target",
+        "Blocked shots":      "blocked_shots",
+        "Corner kicks":       "corners",
+        "Fouls":              "fouls",
+        "Yellow cards":       "yellow_cards",
+        "Red cards":          "red_cards",
+        "Offsides":           "offsides",
+        "Passes":             "passes",
+        "Accurate passes":    "accurate_passes",
+        "Pass accuracy":      "pass_accuracy",
+        "Tackles":            "tackles",
+        "Goalkeeper saves":   "saves",
+        "Free kicks":         "free_kicks",
+        "Big chances":        "big_chances",
+        "Big chances missed": "big_chances_missed",
+    }
+
+    for group in data.get("statistics", []):
+        for item in group.get("statisticsItems", []):
+            name = item.get("name", "")
+            key  = key_map.get(name)
+            if not key:
+                continue
+            # Values come as strings like "55%" or "12" or "432 (87%)"
+            def _parse(val):
+                if val is None:
+                    return None
+                s = str(val).replace("%", "").strip()
+                # Take the first number before any space/paren
+                import re
+                m = re.match(r"[\d.]+", s)
+                if m:
+                    n = m.group()
+                    try:
+                        return int(float(n))
+                    except Exception:
+                        return None
+                return None
+
+            home_stats[key] = _parse(item.get("home"))
+            away_stats[key] = _parse(item.get("away"))
+
+    return {"home": home_stats, "away": away_stats}
+
+
+# ── Player profile (on-demand) ────────────────────────────────────────────────
+
+async def fetch_player_profile(player_id: str) -> dict:
+    """
+    Fetch full player profile from SofaScore.
+    Endpoints:
+      GET /player/{id}                        → basic info
+      GET /player/{id}/statistics/seasons     → season stats list
+      GET /player/{id}/recent-matches/0       → last 5 matches
+
+    Returns standardised PlayerDetailResponse-compatible dict.
+    """
+    client = ss_client()
+
+    # ── Basic info ────────────────────────────────────────────────────────────
+    try:
+        resp = await client.get(f"{SS_BASE}/player/{player_id}")
+        if resp.status_code != 200:
+            return {}
+        p = resp.json().get("player", {})
+    except Exception as ex:
+        log.warning(f"SS player basic info failed for {player_id}: {ex}")
+        return {}
+
+    team     = p.get("team", {})
+    country  = p.get("country", {})
+    position_map = {
+        "G": "Goalkeeper", "D": "Defender",
+        "M": "Midfielder", "F": "Forward", "A": "Forward",
+    }
+    pos_raw  = p.get("position", "") or ""
+    position = position_map.get(pos_raw.upper()[:1], pos_raw)
+
+    photo = f"https://api.sofascore.com/api/v1/player/{player_id}/image"
+    team_logo = ""
+    if team.get("id"):
+        team_logo = f"https://api.sofascore.com/api/v1/team/{team['id']}/image"
+
+    result = {
+        "player_id":    str(player_id),
+        "name":         p.get("name", ""),
+        "first_name":   p.get("firstName", p.get("name", "").split()[0] if p.get("name") else ""),
+        "nationality":  country.get("name", ""),
+        "position":     position,
+        "date_of_birth": p.get("dateOfBirthTimestamp") and
+                         __import__("datetime").datetime.fromtimestamp(
+                             p["dateOfBirthTimestamp"]
+                         ).strftime("%Y-%m-%d") or "",
+        "shirt_no":     p.get("jerseyNumber"),
+        "team":         team.get("name", ""),
+        "team_id":      str(team.get("id", "")),
+        "team_logo":    team_logo,
+        "photo":        photo,
+        "height_cm":    p.get("height"),
+        "preferred_foot": p.get("preferredFoot", ""),
+        "market_value": None,  # SS doesn't expose this
+        "source":       "sofascore",
+    }
+
+    await asyncio.sleep(0.3)
+
+    # ── Season stats ──────────────────────────────────────────────────────────
+    try:
+        resp2 = await client.get(f"{SS_BASE}/player/{player_id}/statistics/seasons")
+        if resp2.status_code == 200:
+            seasons_data = resp2.json()
+            # seasons is a list; take the first one that has football stats
+            for season_entry in (seasons_data.get("uniqueTournamentSeasons") or []):
+                for s_item in (season_entry.get("seasons") or [])[:1]:
+                    sid  = s_item.get("id")
+                    tid  = season_entry.get("uniqueTournament", {}).get("id")
+                    if not sid or not tid:
+                        continue
+                    stat_resp = await client.get(
+                        f"{SS_BASE}/player/{player_id}/unique-tournament/{tid}/season/{sid}/statistics/overall"
+                    )
+                    await asyncio.sleep(0.3)
+                    if stat_resp.status_code == 200:
+                        stats = stat_resp.json().get("statistics", {})
+                        result["season_stats"] = {
+                            "goals":       stats.get("goals", 0) or 0,
+                            "assists":     stats.get("assists", 0) or 0,
+                            "appearances": stats.get("appearances", 0) or 0,
+                            "minutes":     stats.get("minutesPlayed", 0) or 0,
+                            "yellow_cards":stats.get("yellowCards", 0) or 0,
+                            "red_cards":   stats.get("redCards", 0) or 0,
+                            "rating":      stats.get("rating"),
+                            "penalties":   stats.get("penaltyGoals", 0) or 0,
+                        }
+                        break
+                if result.get("season_stats"):
+                    break
+    except Exception as ex:
+        log.warning(f"SS player stats failed for {player_id}: {ex}")
+
+    if not result.get("season_stats"):
+        result["season_stats"] = {
+            "goals": 0, "assists": 0, "appearances": 0, "minutes": 0,
+            "yellow_cards": 0, "red_cards": 0, "rating": None, "penalties": 0,
+        }
+
+    await asyncio.sleep(0.3)
+
+    # ── Recent matches ────────────────────────────────────────────────────────
+    recent_matches = []
+    try:
+        resp3 = await client.get(f"{SS_BASE}/player/{player_id}/matches/last/0")
+        if resp3.status_code == 200:
+            events = resp3.json().get("events", [])[:5]
+            for ev in events:
+                home_t = ev.get("homeTeam", {})
+                away_t = ev.get("awayTeam", {})
+                ts     = ev.get("startTimestamp")
+                tid_ev = ev.get("tournament", {}).get("uniqueTournament", {}).get("id")
+                slug   = SS_TOURNAMENT_IDS.get(tid_ev, "")
+                recent_matches.append({
+                    "match_id":        str(ev.get("id", "")),
+                    "home_team":       home_t.get("name", ""),
+                    "home_team_short": home_t.get("shortName", ""),
+                    "away_team":       away_t.get("name", ""),
+                    "away_team_short": away_t.get("shortName", ""),
+                    "home_logo":       f"https://api.sofascore.com/api/v1/team/{home_t.get('id','')}/image" if home_t.get('id') else "",
+                    "away_logo":       f"https://api.sofascore.com/api/v1/team/{away_t.get('id','')}/image" if away_t.get('id') else "",
+                    "status":          _status(ev),
+                    "score": {
+                        "home": _score(ev, "home"),
+                        "away": _score(ev, "away"),
+                    },
+                    "kickoff_display": _ist_display(ts),
+                    "kickoff_iso":     _ist_iso(ts),
+                    "league_slug":     slug,
+                    "league":          LEAGUES.get(slug, {}).get("name", ""),
+                    "player_rating":   None,  # Would need per-player stats per match
+                    "player_goals":    None,
+                    "player_assists":  None,
+                })
+    except Exception as ex:
+        log.warning(f"SS player recent matches failed for {player_id}: {ex}")
+
+    result["recent_matches"] = recent_matches
+    return result
+
+
+# ── Player search (on-demand) ─────────────────────────────────────────────────
+
+async def search_players(query: str) -> list[dict]:
+    """
+    Search for players by name via SofaScore.
+    GET /search/all?q={query}
+
+    Returns list of player result dicts compatible with /search endpoint.
+    """
+    client = ss_client()
+    url = f"{SS_BASE}/search/all?q={query}&page=0"
+    try:
+        resp = await client.get(url)
+        if resp.status_code != 200:
+            return []
+        data = resp.json()
+    except Exception as ex:
+        log.warning(f"SS search failed for '{query}': {ex}")
+        return []
+
+    results = []
+    # SS returns "results": [{"type": "player", "entity": {...}}]
+    for item in data.get("results", []):
+        if item.get("type") != "player":
+            continue
+        p = item.get("entity", {})
+        if not p:
+            continue
+        pid  = p.get("id", "")
+        team = p.get("team", {})
+        pos_map = {"G": "Goalkeeper", "D": "Defender", "M": "Midfielder", "F": "Forward"}
+        pos_raw = (p.get("position") or "")
+        results.append({
+            "player_id":   str(pid),
+            "name":        p.get("name", ""),
+            "team":        team.get("name", ""),
+            "team_logo":   f"https://api.sofascore.com/api/v1/team/{team.get('id','')}/image" if team.get("id") else "",
+            "nationality": p.get("country", {}).get("name", ""),
+            "photo":       f"https://api.sofascore.com/api/v1/player/{pid}/image",
+            "goals":       0,
+            "assists":     0,
+            "league_slug": "",
+            "league":      "",
+            "source":      "sofascore_search",
+        })
+        if len(results) >= 5:
+            break
+
+    return results
+
+
+# ── Bracket (on-demand) ───────────────────────────────────────────────────────
+
+async def fetch_bracket(league_slug: str, ss_tournament_id: int) -> dict:
+    """
+    Fetch knockout bracket rounds from SofaScore.
+
+    SofaScore exposes cup brackets via:
+      GET /unique-tournament/{id}/seasons  → get current season_id
+      GET /unique-tournament/{id}/season/{season_id}/rounds
+        → returns list of rounds with round codes
+      For each knockout round:
+      GET /unique-tournament/{id}/season/{season_id}/events/round/{round_id}
+        → matches in that round
+
+    Returns standardised bracket response for BracketActivity.
+    """
+    client = ss_client()
+    cfg    = LEAGUES.get(league_slug, {})
+
+    # ── Get current season ────────────────────────────────────────────────────
+    try:
+        resp = await client.get(f"{SS_BASE}/unique-tournament/{ss_tournament_id}/seasons")
+        if resp.status_code != 200:
+            log.warning(f"SS bracket seasons failed: {resp.status_code}")
+            return {}
+        seasons = resp.json().get("seasons", [])
+        if not seasons:
+            return {}
+        season_id   = seasons[0]["id"]
+        season_name = seasons[0].get("name", "")
+    except Exception as ex:
+        log.warning(f"SS seasons failed for {league_slug}: {ex}")
+        return {}
+
+    await asyncio.sleep(0.3)
+
+    # ── Get rounds ────────────────────────────────────────────────────────────
+    try:
+        resp2 = await client.get(
+            f"{SS_BASE}/unique-tournament/{ss_tournament_id}/season/{season_id}/rounds"
+        )
+        if resp2.status_code != 200:
+            log.warning(f"SS bracket rounds failed: {resp2.status_code}")
+            return {}
+        all_rounds = resp2.json().get("rounds", [])
+    except Exception as ex:
+        log.warning(f"SS rounds failed for {league_slug}: {ex}")
+        return {}
+
+    # Filter to knockout rounds only (SofaScore labels them by prefix/name)
+    KNOCKOUT_KEYWORDS = {
+        "round of 16", "last 16", "round of 32", "r16",
+        "quarter", "qf", "semi", "sf", "final",
+    }
+
+    def _is_knockout(r: dict) -> bool:
+        name = (r.get("name") or r.get("description") or "").lower()
+        return any(kw in name for kw in KNOCKOUT_KEYWORDS)
+
+    knockout_rounds = [r for r in all_rounds if _is_knockout(r)]
+
+    # If no explicit knockout rounds found, take the last 4 rounds (typical bracket depth)
+    if not knockout_rounds and all_rounds:
+        knockout_rounds = all_rounds[-4:]
+
+    # Round name normalisation
+    def _round_name(r: dict) -> tuple[str, str]:
+        name = (r.get("name") or r.get("description") or "Round").strip()
+        nl   = name.lower()
+        if "final" in nl and "semi" not in nl and "quarter" not in nl:
+            return "Final", "final"
+        if "semi" in nl:
+            return "Semi-finals", "sf"
+        if "quarter" in nl:
+            return "Quarter-finals", "qf"
+        if "16" in nl or "r16" in nl or "last 16" in nl:
+            return "Round of 16", "r16"
+        if "32" in nl or "last 32" in nl:
+            return "Round of 32", "r32"
+        return name, name.lower().replace(" ", "_")
+
+    # ── Fetch matches for each knockout round ─────────────────────────────────
+    bracket_rounds = []
+
+    for r in knockout_rounds:
+        round_id = r.get("round") or r.get("id")
+        if round_id is None:
+            continue
+        rname, rcode = _round_name(r)
+
+        try:
+            resp3 = await client.get(
+                f"{SS_BASE}/unique-tournament/{ss_tournament_id}/season/{season_id}"
+                f"/events/round/{round_id}"
+            )
+            await asyncio.sleep(0.25)
+            if resp3.status_code != 200:
+                continue
+            events = resp3.json().get("events", [])
+        except Exception as ex:
+            log.warning(f"SS bracket round {round_id} failed: {ex}")
+            continue
+
+        matches = []
+        for ev in events:
+            home_t = ev.get("homeTeam", {})
+            away_t = ev.get("awayTeam", {})
+            ts     = ev.get("startTimestamp")
+            status = _status(ev)
+
+            home_id = home_t.get("id", "")
+            away_id = away_t.get("id", "")
+
+            hs = _score(ev, "home")
+            aws = _score(ev, "away")
+
+            # Determine winner
+            winner = None
+            if status == "finished":
+                if hs is not None and aws is not None:
+                    if hs > aws:
+                        winner = "home"
+                    elif aws > hs:
+                        winner = "away"
+
+            # Aggregate scores (SS provides for 2-leg ties)
+            agg_home = ev.get("homeScore", {}).get("aggregated")
+            agg_away = ev.get("awayScore", {}).get("aggregated")
+            if agg_home is not None and agg_away is not None and winner is None:
+                if agg_home > agg_away:
+                    winner = "home"
+                elif agg_away > agg_home:
+                    winner = "away"
+
+            matches.append({
+                "match_id":        str(ev.get("id", "")),
+                "home_team":       home_t.get("name", "TBD"),
+                "home_team_short": home_t.get("shortName", home_t.get("name", "TBD")),
+                "home_logo":       f"https://api.sofascore.com/api/v1/team/{home_id}/image" if home_id else "",
+                "away_team":       away_t.get("name", "TBD"),
+                "away_team_short": away_t.get("shortName", away_t.get("name", "TBD")),
+                "away_logo":       f"https://api.sofascore.com/api/v1/team/{away_id}/image" if away_id else "",
+                "home_score":      hs,
+                "away_score":      aws,
+                "home_agg":        agg_home,
+                "away_agg":        agg_away,
+                "winner":          winner,
+                "status":          status,
+                "kickoff_display": _ist_display(ts),
+                "kickoff_iso":     _ist_iso(ts),
+                "leg":             ev.get("roundInfo", {}).get("cupRoundType"),
+            })
+
+        if matches:
+            bracket_rounds.append({
+                "name":    rname,
+                "code":    rcode,
+                "matches": matches,
+            })
+
+    # Sort rounds by typical bracket order
+    ORDER = {"r32": 0, "r16": 1, "qf": 2, "sf": 3, "final": 4}
+    bracket_rounds.sort(key=lambda r: ORDER.get(r["code"], 99))
+
+    return {
+        "league_slug": league_slug,
+        "league_name": cfg.get("name", league_slug),
+        "logo_url":    cfg.get("logo_url", ""),
+        "season":      season_name,
+        "rounds":      bracket_rounds,
+    }
+
+
+# ── Top scorers for TSDB leagues (SS-sourced) ─────────────────────────────────
+
+async def fetch_ss_scorers(league_slug: str, ss_tournament_id: int, limit: int = 20) -> list[dict]:
+    """
+    Fetch top scorers from SofaScore for a given tournament.
+    Used for leagues not covered by football-data.org scorers
+    (ISL, IFL, AFC, Conference League).
+
+    GET /unique-tournament/{id}/season/{season_id}/top-players/scoring
+    """
+    client = ss_client()
+
+    # Get current season id
+    try:
+        resp = await client.get(f"{SS_BASE}/unique-tournament/{ss_tournament_id}/seasons")
+        if resp.status_code != 200:
+            return []
+        seasons = resp.json().get("seasons", [])
+        if not seasons:
+            return []
+        season_id = seasons[0]["id"]
+    except Exception as ex:
+        log.warning(f"SS scorers seasons failed for {league_slug}: {ex}")
+        return []
+
+    await asyncio.sleep(0.3)
+
+    url = (f"{SS_BASE}/unique-tournament/{ss_tournament_id}"
+           f"/season/{season_id}/top-players/scoring")
+    try:
+        resp2 = await client.get(url)
+        if resp2.status_code != 200:
+            log.warning(f"SS scorers HTTP {resp2.status_code} for {league_slug}")
+            return []
+        top_players = resp2.json().get("topPlayers", [])
+    except Exception as ex:
+        log.warning(f"SS scorers failed for {league_slug}: {ex}")
+        return []
+
+    results = []
+    for entry in top_players[:limit]:
+        p     = entry.get("player", {})
+        team  = entry.get("team", {})
+        stats = entry.get("statistics", {})
+        pid   = p.get("id", "")
+        results.append({
+            "player_id":   str(pid),
+            "name":        p.get("name", ""),
+            "first_name":  p.get("firstName", ""),
+            "nationality": p.get("country", {}).get("name", ""),
+            "position":    p.get("position", ""),
+            "dob":         "",
+            "team":        team.get("name", ""),
+            "team_short":  team.get("shortName", team.get("name", "")),
+            "team_logo":   f"https://api.sofascore.com/api/v1/team/{team.get('id','')}/image" if team.get("id") else "",
+            "goals":       stats.get("goals", 0) or 0,
+            "assists":     stats.get("goalAssists", 0) or 0,
+            "penalties":   stats.get("penaltyGoals", 0) or 0,
+            "played":      stats.get("appearances", 0) or 0,
+            "photo":       f"https://api.sofascore.com/api/v1/player/{pid}/image",
+        })
+
+    return results

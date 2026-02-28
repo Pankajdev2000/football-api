@@ -375,3 +375,44 @@ async def scrape_all_fd_leagues() -> dict:
             log.error(f"FD scrape failed for {slug}: {ex}")
 
     return result
+
+
+async def fetch_player_fd(player_id: str) -> dict:
+    """
+    Fetch player profile from football-data.org.
+    Used as fallback when SofaScore player fetch fails (e.g. for FD scorer IDs).
+    GET /persons/{id}
+    """
+    data = await _get(f"/persons/{player_id}")
+    await asyncio.sleep(FD_DELAY_S)
+    if not data:
+        return {}
+
+    # FD.org person endpoint returns the player object directly (not nested)
+    # It also includes currentTeam and contract fields
+    team = data.get("currentTeam", {}) or {}
+    pos  = data.get("section", data.get("position", ""))
+
+    return {
+        "player_id":    str(player_id),
+        "name":         data.get("name", ""),
+        "first_name":   data.get("firstName", ""),
+        "nationality":  data.get("nationality", ""),
+        "position":     pos,
+        "date_of_birth": data.get("dateOfBirth", ""),
+        "shirt_no":     data.get("shirtNumber"),
+        "team":         team.get("name", ""),
+        "team_id":      str(team.get("id", "")),
+        "team_logo":    get_team_logo(team.get("name", ""), team.get("crest", "")),
+        "photo":        data.get("image", ""),
+        "height_cm":    None,
+        "preferred_foot": None,
+        "market_value": None,
+        "season_stats": {
+            "goals": 0, "assists": 0, "appearances": 0,
+            "minutes": 0, "yellow_cards": 0, "red_cards": 0,
+            "rating": None, "penalties": 0,
+        },
+        "recent_matches": [],
+        "source":       "football-data",
+    }
