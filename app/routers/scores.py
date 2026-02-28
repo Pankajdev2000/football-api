@@ -12,17 +12,43 @@ All reads from in-memory cache only. Zero external calls.
 
 from fastapi import APIRouter, Query
 from typing import Optional
+from datetime import datetime, timezone
 from app.core.cache import get_cache
 
 router = APIRouter(prefix="/scores", tags=["scores"])
 
 
+def _is_still_upcoming(match: dict) -> bool:
+    """Return True if the match kickoff is still in the future (or within 2-min grace)."""
+    iso = match.get("kickoff_iso", "")
+    if not iso:
+        return True  # No time info — keep it
+    try:
+        # kickoff_iso is stored as IST without tz suffix e.g. "2024-03-16T20:30:00"
+        # We need to compare in UTC. kickoff_utc is available for FD matches.
+        # For TSDB matches kickoff_iso is also IST. Parse as IST.
+        from app.core.config import IST
+        dt_naive = datetime.fromisoformat(iso)
+        # Assume IST if no tz info
+        if dt_naive.tzinfo is None:
+            dt = IST.localize(dt_naive)
+        else:
+            dt = dt_naive
+        # 2-minute grace period — keep showing as upcoming right up to kickoff
+        now_utc = datetime.now(timezone.utc)
+        return dt.astimezone(timezone.utc) > now_utc - __import__('datetime').timedelta(minutes=2)
+    except Exception:
+        return True
+
+
 def _all_upcoming() -> list[dict]:
     fd   = get_cache("fd_leagues")  or {}
-    tsdb = get_cache("tsdb_leagues") or {}   # FIX: was "indian_leagues"
+    tsdb = get_cache("tsdb_leagues") or {}
     out  = []
     for league_data in {**fd, **tsdb}.values():
         out.extend(league_data.get("upcoming", []))
+    # Filter out matches that have already kicked off (cache can be up to 30min stale)
+    out = [m for m in out if _is_still_upcoming(m)]
     out.sort(key=lambda m: m.get("kickoff_iso", ""))
     return out
 

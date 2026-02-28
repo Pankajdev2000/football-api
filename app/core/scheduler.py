@@ -38,8 +38,10 @@ _last_tsdb      = 0.0
 
 
 def _is_active() -> bool:
+    # Active window: 13:00–06:00 IST (covers afternoon La Liga/UCL/Bundesliga + evening EPL)
+    # Previously was 17:00 — missed entire La Liga/UCL afternoon games (14:00–17:00 IST)
     hour = datetime.now(IST).hour
-    return hour >= 17 or hour < 6
+    return hour >= 13 or hour < 6
 
 
 def _live_interval() -> int:

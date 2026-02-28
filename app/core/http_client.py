@@ -58,13 +58,10 @@ def ss_client() -> httpx.AsyncClient:
 def rotate_ss_client() -> httpx.AsyncClient:
     """Force creation of a new SS client with next User-Agent. Call on 403."""
     global _ss_client
-    if _ss_client and not _ss_client.is_closed:
-        import asyncio
-        try:
-            loop = asyncio.get_event_loop()
-            loop.run_until_complete(_ss_client.aclose())
-        except Exception:
-            pass
+    # Don't try to close the old client synchronously inside an async context
+    # (loop.run_until_complete raises RuntimeError if loop is already running).
+    # Just dereference it — the garbage collector and httpx's __del__ handle cleanup,
+    # and a small fd leak on 403 rotation is far better than a crash.
     _ss_client = None
     return ss_client()
 

@@ -17,12 +17,20 @@ SOURCE ASSIGNMENT:
 ═══════════════════════════════════════════════════════════════════════════════
 """
 
+import os
 import pytz
 
 IST = pytz.timezone("Asia/Kolkata")
 
 # ── football-data.org ─────────────────────────────────────────────────────────
-FD_TOKEN   = "059eb2ab33c34001bccb46a3d029cb67"
+# SECURITY: Key must be set as an environment variable on Render, NOT hardcoded.
+# Dashboard → Environment → Add: FD_TOKEN = your_key
+FD_TOKEN   = os.environ.get("FD_TOKEN", "")
+if not FD_TOKEN:
+    import logging
+    logging.getLogger("config").warning(
+        "FD_TOKEN env var not set — football-data.org requests will fail with 403"
+    )
 FD_BASE    = "https://api.football-data.org/v4"
 FD_HEADERS = {"X-Auth-Token": FD_TOKEN}
 

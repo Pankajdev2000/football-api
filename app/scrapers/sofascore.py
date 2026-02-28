@@ -43,10 +43,34 @@ def _ist_iso(ts: Optional[int]) -> str:
 
 
 def _status(event: dict) -> str:
+    """
+    Map SofaScore status code → normalised status string.
+    Full code list (confirmed from SS API):
+      0   = Not started
+      6   = In progress 1st half
+      7   = In progress 2nd half      ← was falling through to "scheduled"
+      31  = Half time
+      60  = Extra time                ← was falling through to "scheduled"
+      61  = Extra time half time      ← was falling through to "scheduled"
+      70  = Awaiting penalties        ← was falling through to "scheduled"
+      100 = Finished (regular/AET)
+      93  = After extra time          ← was falling through to "scheduled"
+      94  = After penalties           ← was falling through to "scheduled"
+      110 = Postponed
+      120 = Cancelled
+      999 = Abandoned
+    """
     code = event.get("status", {}).get("code", 0)
-    if code == 6:   return "live"
-    if code == 31:  return "halftime"
-    if code == 100: return "finished"
+    # Live / in-progress states
+    if code in (6, 7):   return "live"       # 1st half, 2nd half
+    if code == 31:       return "halftime"   # Half time
+    if code in (60, 61): return "live"       # Extra time, ET halftime
+    if code == 70:       return "live"       # Awaiting penalties
+    # Finished states
+    if code in (100, 93, 94): return "finished"  # FT / AET / Penalties
+    # Other terminal states — treat as finished so they don't show as upcoming
+    if code in (110, 120, 999): return "finished"
+    # 0 = not started → scheduled
     return "scheduled"
 
 

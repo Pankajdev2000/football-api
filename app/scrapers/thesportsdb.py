@@ -35,12 +35,16 @@ log = logging.getLogger("thesportsdb")
 TSDB_BASE = "https://www.thesportsdb.com/api/v1/json/3"
 
 # league slug → TheSportsDB league ID + current season string
+# league slug → TheSportsDB league ID + current season string
+# NOTE: europa-league is intentionally NOT here — it's handled by football-data.org
+# (data_source = "football-data" in config.py). It was previously listed here
+# causing confusion even though the guard in scrape_all_tsdb_leagues() prevented
+# double-scraping. Removed to keep this table unambiguous.
 TSDB_LEAGUES: dict[str, dict] = {
     "isl":               {"id": 4346, "season": "2024-2025"},
     "ifl":               {"id": 4347, "season": "2024-2025"},
     "afc":               {"id": 4659, "season": "2024-2025"},
     "conference-league": {"id": 4744, "season": "2024-2025"},
-    "europa-league":     {"id": 4335, "season": "2024-2025"},
 }
 
 # TheSportsDB status strings
@@ -128,7 +132,9 @@ def _build_match(event: dict, league_slug: str) -> dict:
         "round":           f"Round {event.get('intRound', '')}".strip(),
         "kickoff_iso":     _ist_iso(dt),
         "kickoff_display": _ist_display(dt),
-        "kickoff_utc":     event.get("dateEvent", "") + " " + (event.get("strTime") or ""),
+        # Normalise kickoff_utc to ISO format so it sorts correctly alongside FD matches
+        # FD uses "2024-03-16T15:00:00Z", TSDB was using "2024-03-16 19:30:00" (mixed format)
+        "kickoff_utc":     dt.strftime("%Y-%m-%dT%H:%M:%SZ") if dt else "",
         "streaming":       STREAMING.get(league_slug, {}),
         "source":          "thesportsdb",
     }

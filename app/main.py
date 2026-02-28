@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.core.cache import cache_summary
+from app.core.cache import cache_summary, get_cache
 from app.core.http_client import close_all
 from app.core.scheduler import run_scheduler
 from app.routers import scores, leagues, matches
@@ -112,10 +112,38 @@ async def root():
 async def health():
     """Lightweight health check. Ping from UptimeRobot every 5 min."""
     summary = cache_summary()
+
+    # Build per-source detail for easier debugging
+    live_matches   = get_cache("live_scores") or []
+    fd_data        = get_cache("fd_leagues")  or {}
+    tsdb_data      = get_cache("tsdb_leagues") or {}
+
+    fd_upcoming_count  = sum(len(v.get("upcoming", [])) for v in fd_data.values())
+    tsdb_upcoming_count = sum(len(v.get("upcoming", [])) for v in tsdb_data.values())
+
     return {
-        "status":           "healthy" if summary else "warming_up",
-        "cache_keys":       summary,
-        "live_ready":       "live_scores" in summary,
-        "fixtures_ready":   "fd_leagues" in summary,
-        "indian_ready":     "tsdb_leagues" in summary,
+        "status":     "healthy" if summary else "warming_up",
+        "cache_keys": summary,
+        "sources": {
+            "live_scores": {
+                "ready":        "live_scores" in summary,
+                "age_s":        summary.get("live_scores", {}).get("age_s"),
+                "match_count":  len(live_matches),
+            },
+            "football_data": {
+                "ready":        "fd_leagues" in summary,
+                "age_s":        summary.get("fd_leagues", {}).get("age_s"),
+                "leagues_cached": list(fd_data.keys()),
+                "upcoming_count": fd_upcoming_count,
+            },
+            "thesportsdb": {
+                "ready":        "tsdb_leagues" in summary,
+                "age_s":        summary.get("tsdb_leagues", {}).get("age_s"),
+                "leagues_cached": list(tsdb_data.keys()),
+                "upcoming_count": tsdb_upcoming_count,
+            },
+        },
+        "live_ready":     "live_scores" in summary,
+        "fixtures_ready": "fd_leagues" in summary,
+        "indian_ready":   "tsdb_leagues" in summary,
     }
