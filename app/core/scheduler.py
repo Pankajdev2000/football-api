@@ -22,6 +22,7 @@ from app.core.config import IST
 from app.scrapers.sofascore import scrape_live_scores
 from app.scrapers.football_data import scrape_all_fd_leagues
 from app.scrapers.thesportsdb import scrape_all_tsdb_leagues
+from app.scrapers.worldfootball import scrape_isl_standings
 
 log = logging.getLogger("scheduler")
 
@@ -72,17 +73,31 @@ async def _job_fd_leagues() -> None:
 
 
 async def _job_tsdb_leagues() -> None:
-    """TheSportsDB — ISL, IFL, AFC, Conference League — runs every 60 min."""
+    """TheSportsDB + WorldFootball fallback for ISL."""
     global _last_tsdb
     if time.time() - _last_tsdb < TSDB_INTERVAL_S:
         return
+
     log.info("Starting TheSportsDB scrape (ISL/IFL/AFC/UECL)...")
+
     try:
         data = await scrape_all_tsdb_leagues()
+
         if data:
+            # 🔥 ISL fallback
+            isl_block = data.get("isl")
+
+            if isl_block:
+                if not isl_block.get("standings"):
+                    log.info("ISL standings empty → using WorldFootball fallback")
+                    wf_table = await scrape_isl_standings()
+                    if wf_table:
+                        isl_block["standings"] = wf_table
+
             set_cache("tsdb_leagues", data)
             _last_tsdb = time.time()
             log.info(f"TheSportsDB: cached {list(data.keys())}")
+
     except Exception as ex:
         log.error(f"TheSportsDB scrape error: {ex}")
 
